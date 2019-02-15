@@ -5,7 +5,7 @@ using UnityEngine.UI;
 
 /*
  * @Author: Sean Rannie
- * @Date: Feb/14/2019
+ * @Date: Feb/15/2019
  * 
  * This script records audio from the microphone and evaluates the volume of the audio.
  * For use in Unity ONLY.
@@ -22,14 +22,6 @@ using UnityEngine.UI;
  * parameters to function properly. Only use the live evualtion method if you need a faster
  * response time the the microphone input. Keeping the recording length small allows the chunk
  * evaluation method to be just as responsive.
- *     
- * This version of the script uses the maximum point of the waveform as the evaulation
- * data. If you want to change the statistic used to a different variable, please note:
- * 
- * The average volume of the waveform includes positive AND negative amplitudes; therefore,
- * a majority of the time the average will remain at ~ 0.0 because the positive and nagative
- * sides cancel out each other.
- * 
  * 
  * --- This script can be altered to suit anyone's needs ---
  */
@@ -39,10 +31,11 @@ public class VolumeControl : MonoBehaviour
     public Text prompt;                 //Text Object that is displayed
     public int sampleRate = 44100;      //CD-Quality, I do not recommend changing this
     public int recordingLength = 1;     //Length of chunk in seconds
+    public int playbackTimer = 2000;    //The length of delay between the recording and playback (varies based on recordingLength)
     public float maximumPeak = 0.9f;    //The maximum that the recording is allowed to reach (0.0 - 1.0)
-    public float maximumAvg = 0.5f;     //The maximum avg to be considered too loud (0.0 - 1.0)
-    public float minimumAvg = 0.1f;     //The minimum avg to be considered too quiet (0.0 - 1.0)
-    public bool live = false;            //Which evaluation method should be used (live or chunck based)
+    public float maximumAvg = 0.30f;    //The maximum avg to be considered too loud (0.0 - 1.0)
+    public float minimumAvg = 0.05f;    //The minimum avg to be considered too quiet (0.0 - 1.0)
+    public bool live = false;           //Which evaluation method should be used (live or chunck based)
     public bool debug = true;           //Whether information should be written to the console
     public bool playback = true;        //Whether the audio should get played back to the user
 
@@ -90,9 +83,9 @@ public class VolumeControl : MonoBehaviour
         //Interperet resuts
         if(_max > maximumPeak)
             prompt.text = "You're peaking your microphone!";
-        else if (_max > maximumAvg)
+        else if (_avg > maximumAvg)
             prompt.text = "You're too loud!";
-        else if (_max > minimumAvg)
+        else if (_avg > minimumAvg)
             prompt.text = "Perfect!";
         else
             prompt.text = "You're too quiet!";
@@ -105,17 +98,17 @@ public class VolumeControl : MonoBehaviour
         if (_currentPosition < _lastPosition && _audioClip.GetData(_data, 0))
         {
             _max = 0;
-            _min = 0;
+            _min = _data[0];
             _avg = 0;
 
             //Reading the waveform data
             for (int i = 0; i < _chunckSize; i++)
             {
                 if (_data[i] > _max)
-                    _max = _data[i];
+                    _max = Mathf.Abs(_data[i]);
                 if (_data[i] < _min)
-                    _min = _data[i];
-                _avg += _data[i];
+                    _min = Mathf.Abs(_data[i]);
+                _avg += Mathf.Abs(_data[i]);
             }
             _avg /= _chunckSize;
 
@@ -166,7 +159,7 @@ public class VolumeControl : MonoBehaviour
         }
 
         //Plays back the audio when the conditions have been met
-        if (playback && _timer > 1000 && !_audioSource.isPlaying && _audioSource != null)
+        if (playback && _timer > 2000 && !_audioSource.isPlaying && _audioSource != null)
             _audioSource.Play(0);
     }
 
