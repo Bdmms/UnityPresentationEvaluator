@@ -17,6 +17,8 @@ Requirements:
     
 4.) Adjust the public parameters to your liking, every microphone acts differently and I doubt your results will be the same as mine
     
+5.) Attach a UI Slider and RawImage object to view the debug information
+    
 I highly advised NOT using the live evalution, both evaluation methods will require different parameters to function properly. Only use the live evualtion method if you need a faster response time the the microphone input. Keeping the recording length small allows the chunk evaluation method to be just as responsive.
 
 --- This script can be altered to suit anyone's needs ---
