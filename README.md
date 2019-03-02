@@ -1,24 +1,7 @@
-# Unity_Microphone_Evaluator
+# UnityPresentationEvaluator
 
 Author: Sean Rannie
 
-Update Date: Feb/15/2019
+Update Date: Mar/01/2019
 
-This script records audio from the microphone and evaluates the volume of the audio. For use in Unity ONLY.
-
-
-Requirements: 
-
-1.) Attach this script to any object
-
-2.) Make sure to include a UI Text object in the attached script component (or change the script)
-
-3.) If you want the audio to be played back, an AudioSource component needs to be attached to the same object the script is attached to.
-    
-4.) Adjust the public parameters to your liking, every microphone acts differently and I doubt your results will be the same as mine
-    
-5.) Attach a UI Slider and RawImage object to view the debug information
-    
-I highly advised NOT using the live evalution, both evaluation methods will require different parameters to function properly. Only use the live evualtion method if you need a faster response time the the microphone input. Keeping the recording length small allows the chunk evaluation method to be just as responsive.
-
---- This script can be altered to suit anyone's needs ---
+This repository contains scripts that can be used to evaluate different aspects of a speech. The scripts provide flags that can be used to improve aspects of a speech that the presenter is not aware of and adjust in realtime.
