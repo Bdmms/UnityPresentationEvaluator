@@ -114,7 +114,7 @@ public class CameraEvaluator : MonoBehaviour
         float _xDiff = Mathf.Abs(gameObject.transform.rotation.x - anchor.x);
         float _yDiff = Mathf.Abs(gameObject.transform.rotation.y - anchor.y);
         float _zDiff = Mathf.Abs(gameObject.transform.rotation.z - anchor.z);
-        Debug.Log(Mathf.Sqrt(_xDiff * _xDiff + _yDiff * _yDiff + _zDiff * _zDiff));
+        
         return (Mathf.Sqrt(_xDiff * _xDiff + _yDiff * _yDiff + _zDiff * _zDiff) < anchorRange);
     }
 
