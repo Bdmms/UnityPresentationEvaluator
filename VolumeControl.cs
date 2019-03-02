@@ -5,7 +5,7 @@ using UnityEngine.UI;
 
 /*
  * @Author: Sean Rannie
- * @Date: Feb/15/2019
+ * @Date: Mar/01/2019
  * 
  * This script records audio from the microphone and evaluates the volume of the audio.
  * For use in Unity ONLY.
@@ -19,16 +19,63 @@ using UnityEngine.UI;
  *     your results will be the same as mine
  * 5.) Attach a UI Slider and RawImage object to view the debug information
  *     
- * I highly advised NOT using the live evalution, both evaluation methods will require different
- * parameters to function properly. Only use the live evualtion method if you need a faster
- * response time the the microphone input. Keeping the recording length small allows the chunk
- * evaluation method to be just as responsive.
+ * Make sure to adjust liveFrameMin to make the live evaluator more stable.
  * 
  * --- This script can be altered to suit anyone's needs ---
  */
 
-public class VolumeControl : MonoBehaviour
+public class Sentence
 {
+    private Queue<float> _volumeChart;  //The volume over the course of the sentence
+    private double _startTime;          //The starting time of the sentence
+    private double _endTime;            //The ending time of the sentence
+
+    //Constructor
+    public Sentence(double start)
+    {
+        _volumeChart = new Queue<float>();
+        _startTime = start;
+        _endTime = -1;
+        Debug.Log("Sentence Starting");
+    }
+
+    //Marks the end of the sentence
+    public void EndSentence(double end)
+    {
+        //Can only end sentence once
+        if (IsEnded())
+        { 
+            _endTime = end;
+            Debug.Log("Sentence Concluded (" + _volumeChart.Count + " samples)");
+        }
+    }
+
+    //Indication that the sentence has ended
+    public bool IsEnded() { return _endTime == -1; }
+    
+    //Difference in time from when the sentence started and ended
+    public double ElapsedTime {
+        get{ return _endTime - _startTime;}
+    }
+
+    //Data can be streamed in and out of the chart queue
+    public float StreamChart {
+        get{return _volumeChart.Dequeue();}
+        set{_volumeChart.Enqueue(value);}
+    }
+
+    //The size of the sample chart is retrieved
+    public int SampleSize{
+        get { return _volumeChart.Count; }
+    }
+}
+
+public class VolumeEvaluator : MonoBehaviour
+{
+    private static int _DISCARDED_SAMPLES = 3;
+    private static int _VOLUME_SCALE = 4;
+    private static float _VOLUME_SILENCE = 0.008f;
+
     public Text prompt;                 //Text Object that is displayed
     public Slider slider;               //The indicator of the current volume
     public RawImage graph;              //The graph that records the volume
@@ -38,39 +85,49 @@ public class VolumeControl : MonoBehaviour
     public int recordingLength = 1;     //Length of chunk in seconds
     public int playbackTimer = 60;      //The length of delay between the recording and playback (varies based on recordingLength)
     public int liveFrameMin = 5;        //The number of frames the live evaluator waits before evaluating
-    public int graphScale = 3;          //The relative scale that the audio is displayed on-screen
-    public int graphPrecision = 4;      //The precision of the graph (lower value = higher precision = lower performance)
+    public int noiseSamples = 60;       //The number of samples used to combat noise
+    public float minSilenceTime = 0.5f; //The minimum time needed to declare that the sentence is broken
+    public float maxSilenceTime = 1.5f; //The maximum time needed for the speech to be considered paused for too long
     public float maximumPeak = 0.9f;    //The maximum that the recording is allowed to reach (0.0 - 1.0)
     public float maximumAvg = 0.10f;    //The maximum avg to be considered too loud (0.0 - 1.0)
     public float minimumAvg = 0.05f;    //The minimum avg to be considered too quiet (0.0 - 1.0)
     public bool live = true;            //Which evaluation method should be used (live or chunck based)
     public bool debug = false;          //Whether information should be written to the console
     public bool playback = true;        //Whether the audio should get played back to the user
-    public bool liveData = false;       //Whether the lve audio is graphed (performance intensive)
-
+    
+    private LinkedList<Sentence> _sentences = new LinkedList<Sentence>();
     private AudioSource _audioSource;   //The audio source used to output audio
     private AudioClip _audioClip;       //The clip that is recorded
-    private Texture2D g;                //The graphical component of the graph
+    private Texture2D _image;           //The graphical component of the graph
     private float[] _data;              //The data of the clip
-    private float _max;                 //The maximum point in the waveform
-    private float _min;                 //The minimum point in the waveform
-    private float _avg;                 //The avarage volume of the waveform
-    private int _lastPosition;          //The last position of the recording
-    private int _currentPosition;       //The current position of the recording
+    private float _max = 0;             //The maximum point in the waveform
+    private float _min = 0;             //The minimum point in the waveform
+    private float _avg = 0;             //The avarage volume of the waveform
+    private float _avgNoise = 0;        //The average volume of the noise
+    private float _sum = 0;             //The average volume minus noise
+    private float _silenceTimer = 0;    //The time accumulated from silence
+    private int _lastPosition = 0;      //The last position of the recording
+    private int _currentPosition = 0;   //The current position of the recording
     private int _chunckSize;            //The size of the recording chunk
-    private int _timer;                 //Used for various purposes
-    private int _evaluationNum;         //Number of times the audio has been evaluated
-    private int _dataCounter;           //Number of data samples read
+    private int _timer = 0;              //Used for various purposes
+    private int _evaluationNum = 0;     //Number of times the audio has been evaluated
+    private bool _peakFlag = false;
+    private bool _loudFlag = false;
+    private bool _quietFlag = false;
+    private bool _breakFlag = false;
+    private bool _pauseFlag = false;
+    private bool _sentenceStart = false;
+    private bool _recordedFlag = true;
 
     // Start is called before the first frame update
     void Start()
     {
         _chunckSize = sampleRate * recordingLength;
-        _currentPosition = 0;
-        _dataCounter = 0;
-
         _audioClip = Microphone.Start(Microphone.devices[0], true, recordingLength, sampleRate);
         
+        _sentences.AddFirst(new Sentence(0));
+        _sentences.First.Value.EndSentence(0);
+
         //This program picks the first microphone available by default
         if (GetComponent<AudioSource>() != null)
         {
@@ -81,16 +138,14 @@ public class VolumeControl : MonoBehaviour
         //Initializing graphics
         if (graph != null)
         {
-            g = new Texture2D(graphWidth, graphHeight);
+            _image = new Texture2D(graphWidth, graphHeight);
 
             for (int i = 0; i < graphWidth; i++)
-                g.SetPixel(i, graphHeight/2, Color.black);
-            g.Apply();
+                _image.SetPixel(i, graphHeight/2, Color.black);
+            _image.Apply();
 
-            graph.texture = g;
+            graph.texture = _image;
         }
-        else
-            liveData = false;
     }
 
     // Update is called once per frame
@@ -107,7 +162,25 @@ public class VolumeControl : MonoBehaviour
         else
             ChunkEvaluation();  //Evaulation occurs when chunk has been recorded (delay in evaluation)
 
-        Refresh();
+        //Interperet resuts
+        _peakFlag = _max > maximumPeak;
+        _loudFlag = _avgNoise > maximumAvg;
+        _quietFlag = _avgNoise < minimumAvg;
+
+        _sum = _avg - _avgNoise;
+        SentenceEvaluator();    //Evaluates breaks in sentences
+    }
+
+    // Called after Update()
+    void LateUpdate()
+    {
+        //Average Noise Adjuster (note: first sample is discarded)
+        if (_timer < noiseSamples + _DISCARDED_SAMPLES)
+            _avgNoise += _avg;
+        else if (_timer == noiseSamples + _DISCARDED_SAMPLES)
+            _avgNoise = _avgNoise / noiseSamples;
+        else
+            Refresh();
     }
 
     //Modifies components that are on screen
@@ -115,56 +188,91 @@ public class VolumeControl : MonoBehaviour
     {
         //On-screen indicator
         if (slider != null)
-        { 
-            slider.value = _avg * graphScale * 2;
-        }
+            slider.value = _sum * _VOLUME_SCALE * 2;
 
         //On-screen text
-        if(prompt != null)
-        {
-            //Interperet resuts
-            if (_max > maximumPeak)
-                prompt.text = "You're peaking your microphone!";
-            else if (_avg > maximumAvg)
-                prompt.text = "You're too loud!";
-            else if (_avg > minimumAvg)
-                prompt.text = "Perfect!";
-            else
-                prompt.text = "You're too quiet!";
-        }
+        if (prompt != null)
+            SetPrompt();
 
         //Waveform Graph
         if (graph != null)
+            SetGraph();
+    }
+
+    //Sets on-screen text
+    private void SetPrompt() { 
+        if(prompt != null)
         {
-            //Average
-            for (int i = graphHeight / 2; i < graphHeight; i++)
-                g.SetPixel(_evaluationNum % graphWidth, i, Color.white);
-            
-            for (int i = 0; i < _avg * graphHeight * graphScale; i++)
-                g.SetPixel(_evaluationNum % graphWidth, graphHeight / 2 + i, Color.red);
+            if (_peakFlag) prompt.text = "You're peaking your microphone!";
+            else if (_pauseFlag) prompt.text = "You're pausing for too long!";
+            else if (_quietFlag) prompt.text = "You're too quiet!";
+            else if (_loudFlag) prompt.text = "You're too loud!";
+            else prompt.text = "Perfect!";
+        }
+    }
 
-            g.SetPixel(_evaluationNum % graphWidth, graphHeight / 2, Color.black);
+    //Sets the graph waveform
+    private void SetGraph()
+    {
+        //Average
+        for (int i = graphHeight / 2; i < graphHeight; i++)
+            _image.SetPixel(_evaluationNum % graphWidth, i, Color.white);
 
-            //Data
-            if (liveData && _timer % liveFrameMin == 0) //Not efficient
-            {
-                for (int i = 0; i < GetRecordingSize() / graphPrecision; i++, _dataCounter += graphPrecision)
+        for (int i = 0; i < _sum * graphHeight * _VOLUME_SCALE; i++)
+            _image.SetPixel(_evaluationNum % graphWidth, graphHeight / 2 + i, Color.red);
+
+        _image.SetPixel(_evaluationNum % graphWidth, graphHeight / 2, Color.black);
+
+        //If sentence needs to be recorded
+        if (!(_sentenceStart || _recordedFlag))
+        {
+            _recordedFlag = true;
+            int samples = _sentences.Last.Value.SampleSize;
+            int rate = samples / graphWidth;
+            int iRate = graphWidth / samples;
+            float total = 0;
+
+            Debug.Log("Rate: " + rate);
+            Debug.Log("Inverse Rate: " + iRate);
+
+            //Fill waveform graph
+            if (rate < 1) //More pixels than samples
+                for (int x = 0; x < graphWidth; x++)
                 {
+                    if (x % iRate == 0)
+                    {
+                        total = _sentences.Last.Value.StreamChart;
+                        Debug.Log("Marking: " + total);
+                    }
+
                     for (int s = 0; s < graphHeight / 2; s++)
                     {
-                        for (int x = 0; x < graphPrecision; x++)
-                        {
-                            if (s < Mathf.Abs(_data[(_lastPosition + i * graphPrecision) % _chunckSize]) * graphHeight * graphScale)
-                                g.SetPixel((_dataCounter + x) % graphWidth, s, Color.blue);
-                            else
-                                g.SetPixel((_dataCounter + x) % graphWidth, s, Color.white);
-                        }
+                        if (s < Mathf.Abs(total * graphHeight * _VOLUME_SCALE))
+                            _image.SetPixel(x, s, Color.blue);
+                        else
+                            _image.SetPixel(x, s, Color.white);
                     }
                 }
-            }
 
-            g.Apply();
+            else //More samples than pixels
+                for (int x = 0; x < graphWidth; x++, total = 0)
+                {
+                    for (int i = 0; i < rate; i++)
+                        total += _sentences.Last.Value.StreamChart;
+
+                    for (int s = 0; s < graphHeight / 2; s++)
+                    {
+                        if (s < Mathf.Abs(total / rate * graphHeight * _VOLUME_SCALE))
+                            _image.SetPixel(x, s, Color.blue);
+                        else
+                            _image.SetPixel(x, s, Color.white);
+                    }
+                }
         }
+        else if (_sentenceStart)
+            _recordedFlag = false;
+
+        _image.Apply();
     }
 
     //Evaulates after a recording chunk
@@ -219,6 +327,39 @@ public class VolumeControl : MonoBehaviour
         }
     }
 
+    //Evaluates and controls the sentence breaks of the audio
+    private void SentenceEvaluator()
+    {
+        //If volume is below silence threshold
+        if(_sum < _VOLUME_SILENCE)
+        {
+            _silenceTimer += Time.deltaTime;
+
+            if (_silenceTimer > minSilenceTime)
+            {
+                _breakFlag = true;
+                _sentenceStart = false;
+                _sentences.Last.Value.EndSentence(_silenceTimer);
+            }
+
+            if(_silenceTimer > maxSilenceTime)
+                _pauseFlag = true;
+        }
+        else
+        {
+            _silenceTimer = 0;
+            _breakFlag = _pauseFlag = false;
+
+            if (!_sentenceStart)
+            {
+                _sentences.AddLast(new Sentence(_silenceTimer));
+                _sentenceStart = true;
+            }
+
+            _sentences.Last.Value.StreamChart = _sum;
+        }
+    }
+
     //Displays important data in the console
     private void Debugger()
     {
@@ -232,6 +373,8 @@ public class VolumeControl : MonoBehaviour
             Debug.Log("PEAK: " + _max);
             Debug.Log("ANTIPEAK: " + _min);
             Debug.Log("AVG: " + _avg);
+            Debug.Log("NOISE: " + _avgNoise);
+            Debug.Log("SUM: " + (_avg - _avgNoise));
         }
 
         //Plays back the audio when the conditions have been met
