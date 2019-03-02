@@ -82,18 +82,19 @@ public class VolumeEvaluator : MonoBehaviour
     public int graphWidth = 200;        //The width of the graph component
     public int graphHeight = 100;       //The height of the graph component
     public int sampleRate = 44100;      //CD-Quality, I do not recommend changing this
+    public int sentenceCapacity = 20;   //The number of sentences that are maintained in the list
     public int recordingLength = 1;     //Length of chunk in seconds
     public int playbackTimer = 60;      //The length of delay between the recording and playback (varies based on recordingLength)
     public int liveFrameMin = 5;        //The number of frames the live evaluator waits before evaluating
     public int noiseSamples = 60;       //The number of samples used to combat noise
-    public float minSilenceTime = 0.5f; //The minimum time needed to declare that the sentence is broken
+    public float minSilenceTime = 0.75f;//The minimum time needed to declare that the sentence is broken
     public float maxSilenceTime = 1.5f; //The maximum time needed for the speech to be considered paused for too long
     public float maximumPeak = 0.9f;    //The maximum that the recording is allowed to reach (0.0 - 1.0)
     public float maximumAvg = 0.10f;    //The maximum avg to be considered too loud (0.0 - 1.0)
     public float minimumAvg = 0.05f;    //The minimum avg to be considered too quiet (0.0 - 1.0)
     public bool live = true;            //Which evaluation method should be used (live or chunck based)
     public bool debug = false;          //Whether information should be written to the console
-    public bool playback = true;        //Whether the audio should get played back to the user
+    public bool playback = false;       //Whether the audio should get played back to the user
     
     private LinkedList<Sentence> _sentences = new LinkedList<Sentence>();
     private AudioSource _audioSource;   //The audio source used to output audio
@@ -109,15 +110,15 @@ public class VolumeEvaluator : MonoBehaviour
     private int _lastPosition = 0;      //The last position of the recording
     private int _currentPosition = 0;   //The current position of the recording
     private int _chunckSize;            //The size of the recording chunk
-    private int _timer = 0;              //Used for various purposes
+    private int _timer = 0;             //Used for various purposes
     private int _evaluationNum = 0;     //Number of times the audio has been evaluated
-    private bool _peakFlag = false;
-    private bool _loudFlag = false;
-    private bool _quietFlag = false;
-    private bool _breakFlag = false;
-    private bool _pauseFlag = false;
-    private bool _sentenceStart = false;
-    private bool _recordedFlag = true;
+    private bool _peakFlag = false;     //Triggered when the speaker peaks their microphone
+    private bool _loudFlag = false;     //Triggered when the speaker is too loud
+    private bool _quietFlag = false;    //Triggered when the speaker is too quiet
+    private bool _breakFlag = false;    //Triggered when the sentence ends
+    private bool _pauseFlag = false;    //Triggered when the speaker pauses too long
+    private bool _sentenceStart = false;//Triggered when the sentence starts
+    private bool _recordedFlag = true;  //Triggered when the sentence is recorded
 
     // Start is called before the first frame update
     void Start()
@@ -215,12 +216,14 @@ public class VolumeEvaluator : MonoBehaviour
     private void SetGraph()
     {
         //Average
-        for (int i = graphHeight / 2; i < graphHeight; i++)
-            _image.SetPixel(_evaluationNum % graphWidth, i, Color.white);
+        for (int i = 0; i < graphHeight / 2; i++)
+        {
+            if(i < _sum * graphHeight * _VOLUME_SCALE)
+                _image.SetPixel(_evaluationNum % graphWidth, graphHeight / 2 + i, Color.red);
+            else
+                _image.SetPixel(_evaluationNum % graphWidth, graphHeight / 2 + i, Color.white);
 
-        for (int i = 0; i < _sum * graphHeight * _VOLUME_SCALE; i++)
-            _image.SetPixel(_evaluationNum % graphWidth, graphHeight / 2 + i, Color.red);
-
+        }
         _image.SetPixel(_evaluationNum % graphWidth, graphHeight / 2, Color.black);
 
         //If sentence needs to be recorded
@@ -229,21 +232,15 @@ public class VolumeEvaluator : MonoBehaviour
             _recordedFlag = true;
             int samples = _sentences.Last.Value.SampleSize;
             int rate = samples / graphWidth;
-            int iRate = graphWidth / samples;
+            int iRate = graphWidth / samples + 1;
             float total = 0;
-
-            Debug.Log("Rate: " + rate);
-            Debug.Log("Inverse Rate: " + iRate);
 
             //Fill waveform graph
             if (rate < 1) //More pixels than samples
                 for (int x = 0; x < graphWidth; x++)
                 {
                     if (x % iRate == 0)
-                    {
                         total = _sentences.Last.Value.StreamChart;
-                        Debug.Log("Marking: " + total);
-                    }
 
                     for (int s = 0; s < graphHeight / 2; s++)
                     {
@@ -268,6 +265,9 @@ public class VolumeEvaluator : MonoBehaviour
                             _image.SetPixel(x, s, Color.white);
                     }
                 }
+
+            if (_sentences.Count > sentenceCapacity)
+                _sentences.RemoveFirst();
         }
         else if (_sentenceStart)
             _recordedFlag = false;
@@ -335,6 +335,7 @@ public class VolumeEvaluator : MonoBehaviour
         {
             _silenceTimer += Time.deltaTime;
 
+            //If silence time has reached minimum threshold
             if (_silenceTimer > minSilenceTime)
             {
                 _breakFlag = true;
@@ -342,14 +343,17 @@ public class VolumeEvaluator : MonoBehaviour
                 _sentences.Last.Value.EndSentence(_silenceTimer);
             }
 
+            //If silent for too long
             if(_silenceTimer > maxSilenceTime)
                 _pauseFlag = true;
         }
+        //If sound is detected
         else
         {
             _silenceTimer = 0;
             _breakFlag = _pauseFlag = false;
 
+            //If sentence hasn't been started
             if (!_sentenceStart)
             {
                 _sentences.AddLast(new Sentence(_silenceTimer));
